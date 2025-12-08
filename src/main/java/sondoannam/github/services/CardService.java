@@ -96,6 +96,8 @@ public class CardService {
     // Lệnh ghi ảnh (INS_WRITE_IMAGE)
     private static final int INS_WRITE_IMAGE_INT = 0x10;
 
+    private static final int APPLET_MAX_IMAGE_SIZE = 4096;
+
     /**
      * Hàm nhận chuỗi Hex ảnh, cắt nhỏ và ghi log ra file
      * @param hexImage Chuỗi Hex dài của ảnh (4096 bytes ~ 8192 ký tự hex)
@@ -112,6 +114,18 @@ public class CardService {
         }
 
         int totalBytes = imageData.length;
+
+        if (totalBytes > APPLET_MAX_IMAGE_SIZE) {
+            System.out.println("[WARN] Ảnh quá lớn (" + totalBytes + "), đang cắt xuống " + APPLET_MAX_IMAGE_SIZE);
+            // Tạo mảng mới đúng kích thước chuẩn
+            byte[] trimmedData = new byte[APPLET_MAX_IMAGE_SIZE];
+            System.arraycopy(imageData, 0, trimmedData, 0, APPLET_MAX_IMAGE_SIZE);
+
+            // Gán lại để xử lý
+            imageData = trimmedData;
+            totalBytes = APPLET_MAX_IMAGE_SIZE;
+        }
+
         String logFileName = "debug_image_chunks.txt";
 
         try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(logFileName, true)))) {

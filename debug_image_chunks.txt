@@ -113,3 +113,80 @@ Packet #16 (Offset 3840): Len=240
 >> Success (Time: 6ms)
 Packet #17 (Offset 4080): Len=23
 >> ERROR: Upload Failed at offset 4080 SW=6a84
+
+=== REAL UPLOAD TO CARD - 2025-12-08 23:50:10 ===
+Packet #0 (Offset 0): Len=240
+>> Success (Time: 9ms)
+Packet #1 (Offset 240): Len=240
+>> Success (Time: 6ms)
+Packet #2 (Offset 480): Len=240
+>> Success (Time: 9ms)
+Packet #3 (Offset 720): Len=240
+>> Success (Time: 9ms)
+Packet #4 (Offset 960): Len=240
+>> Success (Time: 7ms)
+Packet #5 (Offset 1200): Len=240
+>> Success (Time: 9ms)
+Packet #6 (Offset 1440): Len=240
+>> Success (Time: 8ms)
+Packet #7 (Offset 1680): Len=240
+>> Success (Time: 7ms)
+Packet #8 (Offset 1920): Len=240
+>> Success (Time: 9ms)
+Packet #9 (Offset 2160): Len=240
+>> Success (Time: 8ms)
+Packet #10 (Offset 2400): Len=240
+>> Success (Time: 8ms)
+Packet #11 (Offset 2640): Len=240
+>> Success (Time: 8ms)
+Packet #12 (Offset 2880): Len=240
+>> Success (Time: 8ms)
+Packet #13 (Offset 3120): Len=240
+>> Success (Time: 9ms)
+Packet #14 (Offset 3360): Len=240
+>> Success (Time: 7ms)
+Packet #15 (Offset 3600): Len=240
+>> Success (Time: 8ms)
+Packet #16 (Offset 3840): Len=240
+>> Success (Time: 8ms)
+Packet #17 (Offset 4080): Len=23
+>> ERROR: Upload Failed at offset 4080 SW=6a84
+
+=== REAL UPLOAD TO CARD - 2025-12-08 23:59:58 ===
+Packet #0 (Offset 0): Len=240
+>> Success (Time: 8ms)
+Packet #1 (Offset 240): Len=240
+>> Success (Time: 7ms)
+Packet #2 (Offset 480): Len=240
+>> Success (Time: 8ms)
+Packet #3 (Offset 720): Len=240
+>> Success (Time: 9ms)
+Packet #4 (Offset 960): Len=240
+>> Success (Time: 8ms)
+Packet #5 (Offset 1200): Len=240
+>> Success (Time: 8ms)
+Packet #6 (Offset 1440): Len=240
+>> Success (Time: 7ms)
+Packet #7 (Offset 1680): Len=240
+>> Success (Time: 9ms)
+Packet #8 (Offset 1920): Len=240
+>> Success (Time: 7ms)
+Packet #9 (Offset 2160): Len=240
+>> Success (Time: 8ms)
+Packet #10 (Offset 2400): Len=240
+>> Success (Time: 8ms)
+Packet #11 (Offset 2640): Len=240
+>> Success (Time: 8ms)
+Packet #12 (Offset 2880): Len=240
+>> Success (Time: 8ms)
+Packet #13 (Offset 3120): Len=240
+>> Success (Time: 8ms)
+Packet #14 (Offset 3360): Len=240
+>> Success (Time: 6ms)
+Packet #15 (Offset 3600): Len=240
+>> Success (Time: 9ms)
+Packet #16 (Offset 3840): Len=240
+>> Success (Time: 9ms)
+Packet #17 (Offset 4080): Len=16
+>> Success (Time: 9ms)
+=== UPLOAD COMPLETE ===

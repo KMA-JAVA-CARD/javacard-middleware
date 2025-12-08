@@ -16,6 +16,10 @@ public class Main {
     private static CardService cardService = new CardService();
     private static Gson gson = new Gson();
 
+    static class UploadRequest {
+        String hexData;
+    }
+
     public static void main(String[] args) throws IOException {
         int port = 8081;
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -54,22 +58,32 @@ public class Main {
             public void handle(HttpExchange exchange) throws IOException {
                 handleCORS(exchange);
                 if ("POST".equals(exchange.getRequestMethod())) {
-                    // 1. Đọc Body (Chuỗi Hex ảnh từ Electron)
-                    String hexBody = new String(exchange.getRequestBody().readAllBytes()).trim();
+                    String jsonBody = new String(exchange.getRequestBody().readAllBytes()).trim();
 
-                    // Kiểm tra sơ bộ
-                    if (hexBody.isEmpty()) {
-                        sendResponse(exchange, 400, "Error: Empty body");
-                        return;
+                    System.out.println("[DEBUG] JSON Received: " + jsonBody.substring(0, Math.min(50, jsonBody.length())) + "...");
+
+                    try {
+                        // 2. Dùng Gson để bóc tách lấy giá trị "hexData"
+                        UploadRequest request = gson.fromJson(jsonBody, UploadRequest.class);
+                        String realHexData = request.hexData;
+
+                        if (realHexData == null || realHexData.isEmpty()) {
+                            sendResponse(exchange, 400, "Error: hexData field is missing or empty");
+                            return;
+                        }
+
+                        // Log kiểm tra lại lần cuối
+                        System.out.println("[INFO] Nhận yêu cầu upload ảnh. Độ dài Hex: " + realHexData.length());
+                        
+                        String result = cardService.uploadImageToCard(realHexData);
+
+                        int status = result.startsWith("Success") ? 200 : 500;
+                        sendResponse(exchange, status, result);
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        sendResponse(exchange, 400, "Error parsing JSON: " + e.getMessage());
                     }
-
-                    System.out.println("[INFO] Nhận yêu cầu upload ảnh. Độ dài Hex: " + hexBody.length());
-
-                    // 2. Gọi hàm xử lý chunking
-                    String result = cardService.uploadImageToCard(hexBody);
-
-                    // 3. Trả kết quả
-                    sendResponse(exchange, 200, result);
                 }
             }
         });
