@@ -49,6 +49,31 @@ public class Main {
             }
         });
 
+        server.createContext("/upload-image", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    // 1. Đọc Body (Chuỗi Hex ảnh từ Electron)
+                    String hexBody = new String(exchange.getRequestBody().readAllBytes()).trim();
+
+                    // Kiểm tra sơ bộ
+                    if (hexBody.isEmpty()) {
+                        sendResponse(exchange, 400, "Error: Empty body");
+                        return;
+                    }
+
+                    System.out.println("[INFO] Nhận yêu cầu upload ảnh. Độ dài Hex: " + hexBody.length());
+
+                    // 2. Gọi hàm xử lý chunking
+                    String result = cardService.uploadImageToCard(hexBody);
+
+                    // 3. Trả kết quả
+                    sendResponse(exchange, 200, result);
+                }
+            }
+        });
+
         server.setExecutor(null);
         server.start();
         System.out.println("Java Middleware is running on port " + port);

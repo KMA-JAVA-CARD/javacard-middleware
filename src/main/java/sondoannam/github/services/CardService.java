@@ -3,6 +3,12 @@ package sondoannam.github.services;
 import sondoannam.github.utils.HexUtils;
 
 import javax.smartcardio.*;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 public class CardService {
@@ -81,6 +87,81 @@ public class CardService {
             System.out.println("[INFO] Đã ngắt kết nối thẻ.");
         } catch (Exception e) {
             e.printStackTrace();
+        }
+    }
+
+    // Kích thước tối đa của dữ liệu trong 1 lệnh APDU (Max 255, ta chọn 240)
+    private static final int MAX_APDU_DATA_SIZE = 240;
+
+    // Lệnh ghi ảnh (INS_WRITE_IMAGE)
+    private static final int INS_WRITE_IMAGE_INT = 0x10;
+
+    /**
+     * Hàm nhận chuỗi Hex ảnh, cắt nhỏ và ghi log ra file
+     * @param hexImage Chuỗi Hex dài của ảnh (4096 bytes ~ 8192 ký tự hex)
+     * @return Thông báo kết quả
+     */
+    public String uploadImageToCard(String hexImage) {
+        if (channel == null) return "Error: Card not connected";
+
+        byte[] imageData;
+        try {
+            imageData = HexUtils.hexToBytes(hexImage);
+        } catch (IllegalArgumentException e) {
+            return "Error: Invalid Hex String";
+        }
+
+        int totalBytes = imageData.length;
+        String logFileName = "debug_image_chunks.txt";
+
+        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(logFileName, true)))) {
+            String timeStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            writer.println("\n=== REAL UPLOAD TO CARD - " + timeStamp + " ===");
+
+            int offset = 0;
+            int chunkIndex = 0;
+
+            while (offset < totalBytes) {
+                // 1. Cắt gói
+                int len = Math.min(MAX_APDU_DATA_SIZE, totalBytes - offset);
+                byte[] chunkData = new byte[len];
+                System.arraycopy(imageData, offset, chunkData, 0, len);
+
+                // 2. Tính P1, P2
+                int p1 = (offset >> 8) & 0xFF;
+                int p2 = offset & 0xFF;
+
+                // 3. Ghi log debug
+                writer.printf("Packet #%d (Offset %d): Len=%d\n", chunkIndex, offset, len);
+
+                // 4. GỬI LỆNH XUỐNG THẺ THẬT
+                // CLA=A0, INS=10, P1, P2, Data
+                CommandAPDU cmd = new CommandAPDU(0xA0, INS_WRITE_IMAGE_INT, p1, p2, chunkData);
+
+                long startTime = System.currentTimeMillis();
+                ResponseAPDU res = channel.transmit(cmd);
+                long duration = System.currentTimeMillis() - startTime;
+
+                // 5. Kiểm tra phản hồi
+                if (res.getSW() != 0x9000) {
+                    String errorMsg = "Upload Failed at offset " + offset + " SW=" + Integer.toHexString(res.getSW());
+                    writer.println(">> ERROR: " + errorMsg);
+                    System.out.println(errorMsg);
+                    return errorMsg;
+                }
+
+                writer.println(">> Success (Time: " + duration + "ms)");
+
+                offset += len;
+                chunkIndex++;
+            }
+
+            writer.println("=== UPLOAD COMPLETE ===");
+            return "Success: Image uploaded to card (" + totalBytes + " bytes)";
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "Error: " + e.getMessage();
         }
     }
 }
