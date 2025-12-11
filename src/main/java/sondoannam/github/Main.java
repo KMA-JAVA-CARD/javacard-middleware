@@ -20,6 +20,19 @@ public class Main {
         String hexData;
     }
 
+    static class PinRequest {
+        String pin;
+    }
+
+    static class UserInfoRequest {
+        String pin;
+        String fullName;
+        String dob;
+        String address;
+        String phone;
+        // Có thể thêm email...
+    }
+
     public static void main(String[] args) throws IOException {
         int port = 8081;
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -53,6 +66,96 @@ public class Main {
             }
         });
 
+        server.createContext("/register", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    String json = new String(exchange.getRequestBody().readAllBytes());
+                    PinRequest req = gson.fromJson(json, PinRequest.class);
+
+                    String result = cardService.registerCard(req.pin);
+                    // Result đã là JSON string rồi hoặc Error message
+                    boolean isJson = result.startsWith("{");
+                    sendResponse(exchange, result.startsWith("Error") ? 500 : 200, result);
+                }
+            }
+        });
+
+        server.createContext("/verify-pin", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    String json = new String(exchange.getRequestBody().readAllBytes());
+                    PinRequest req = gson.fromJson(json, PinRequest.class);
+
+                    String result = cardService.verifyPin(req.pin);
+                    sendResponse(exchange, result.startsWith("Success") ? 200 : 401, result);
+                }
+            }
+        });
+
+        server.createContext("/card-id", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("GET".equals(exchange.getRequestMethod())) {
+                    String result = cardService.getCardId();
+                    sendResponse(exchange, result.startsWith("Error") ? 500 : 200, result);
+                }
+            }
+        });
+
+        server.createContext("/update-info", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    try {
+                        String jsonBody = new String(exchange.getRequestBody().readAllBytes()).trim();
+                        System.out.println("[INFO] Update Info Request: " + jsonBody);
+
+                        UserInfoRequest req = gson.fromJson(jsonBody, UserInfoRequest.class);
+
+                        // Validate PIN
+                        if (req.pin == null || req.pin.isEmpty()) {
+                            sendResponse(exchange, 400, "Error: PIN is required");
+                            return;
+                        }
+
+                        // 1. Ghép chuỗi (Pipe Separated)
+                        // Thứ tự phải thống nhất với Applet lúc đọc ra
+                        String dataString = req.fullName + "|" + req.dob + "|" + req.address + "|" + req.phone;
+
+                        // 2. Gửi xuống thẻ
+                        String result = cardService.updateUserInfo(req.pin, dataString);
+
+                        int status = result.startsWith("Success") ? 200 : 500;
+                        sendResponse(exchange, status, result);
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        sendResponse(exchange, 400, "Error: " + e.getMessage());
+                    }
+                }
+            }
+        });
+
+        server.createContext("/get-info-secure", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    String json = new String(exchange.getRequestBody().readAllBytes());
+                    PinRequest req = gson.fromJson(json, PinRequest.class);
+
+                    String result = cardService.getSecureInfo(req.pin);
+                    sendResponse(exchange, result.startsWith("Error") ? 500 : 200, result);
+                }
+            }
+        });
+
         server.createContext("/upload-image", new HttpHandler() {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
@@ -74,7 +177,7 @@ public class Main {
 
                         // Log kiểm tra lại lần cuối
                         System.out.println("[INFO] Nhận yêu cầu upload ảnh. Độ dài Hex: " + realHexData.length());
-                        
+
                         String result = cardService.uploadImageToCard(realHexData);
 
                         int status = result.startsWith("Success") ? 200 : 500;

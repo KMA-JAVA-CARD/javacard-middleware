@@ -17,6 +17,20 @@ public class CardService {
 
     // AID chuẩn (10 bytes)
     private static final byte[] APPLET_AID = HexUtils.hexToBytes("A00000006203010A0100");
+    // Kích thước tối đa của dữ liệu trong 1 lệnh APDU (Max 255, ta chọn 240)
+    private static final int MAX_APDU_DATA_SIZE = 240;
+    // Lệnh ghi ảnh (INS_WRITE_IMAGE)
+    private static final int INS_WRITE_IMAGE_INT = 0x10;
+    private static final int APPLET_MAX_IMAGE_SIZE = 4096;
+
+    private static final int INS_SET_INFO = 0x21; // Lệnh Update Info
+    private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
+    private static final int AES_BLOCK_SIZE = 16;
+
+    private static final int INS_REGISTER = 0x01;
+    private static final int INS_VERIFY_PIN = 0x02;
+    private static final int INS_GET_CARD_ID = 0x06;
+    private static final int INS_GET_INFO_SECURE = 0x22;
 
     public boolean connect() {
         try {
@@ -90,13 +104,92 @@ public class CardService {
         }
     }
 
-    // Kích thước tối đa của dữ liệu trong 1 lệnh APDU (Max 255, ta chọn 240)
-    private static final int MAX_APDU_DATA_SIZE = 240;
+    // --- ĐĂNG KÝ THẺ (REGISTER) ---
+    // Input: PIN
+    // Output: JSON String { "cardId": "...", "publicKey": "..." }
+    public String registerCard(String pin) {
+        if (channel == null) return "Error: Card not connected";
+        try {
+            byte[] pinBytes = pin.getBytes();
+            int pinLen = pinBytes.length;
 
-    // Lệnh ghi ảnh (INS_WRITE_IMAGE)
-    private static final int INS_WRITE_IMAGE_INT = 0x10;
+            // Payload: [PIN_LEN] [PIN]
+            byte[] payload = new byte[1 + pinLen];
+            payload[0] = (byte) pinLen;
+            System.arraycopy(pinBytes, 0, payload, 1, pinLen);
 
-    private static final int APPLET_MAX_IMAGE_SIZE = 4096;
+            // Gửi lệnh
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_REGISTER, 0x00, 0x00, payload);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                byte[] data = res.getData();
+                // Parse dữ liệu trả về: [CardID(8)] [LenMod(2)] [Modulus] [LenExp(2)] [Exponent]
+
+                // 1. Lấy CardID
+                byte[] idBytes = new byte[8];
+                System.arraycopy(data, 0, idBytes, 0, 8);
+                String cardId = HexUtils.bytesToHex(idBytes);
+
+                // 2. Lấy Modulus
+                int modLenIdx = 8;
+                int modLen = ((data[modLenIdx] & 0xFF) << 8) | (data[modLenIdx+1] & 0xFF);
+                byte[] modBytes = new byte[modLen];
+                System.arraycopy(data, modLenIdx + 2, modBytes, 0, modLen);
+                String modulus = HexUtils.bytesToHex(modBytes);
+
+                // 3. Lấy Exponent
+                int expLenIdx = modLenIdx + 2 + modLen;
+                int expLen = ((data[expLenIdx] & 0xFF) << 8) | (data[expLenIdx+1] & 0xFF);
+                byte[] expBytes = new byte[expLen];
+                System.arraycopy(data, expLenIdx + 2, expBytes, 0, expLen);
+                String exponent = HexUtils.bytesToHex(expBytes);
+
+                // Trả về JSON
+                return String.format("{\"cardId\":\"%s\", \"modulus\":\"%s\", \"exponent\":\"%s\"}",
+                        cardId, modulus, exponent);
+            } else {
+                return "Error: SW=" + Integer.toHexString(res.getSW());
+            }
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // --- XÁC THỰC PIN (VERIFY) ---
+    public String verifyPin(String pin) {
+        if (channel == null) return "Error: Card not connected";
+        try {
+            byte[] pinBytes = pin.getBytes();
+            // Lệnh Verify thường gửi raw PIN luôn
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_VERIFY_PIN, 0x00, 0x00, pinBytes);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) return "Success";
+            if (res.getSW() == 0x6983) return "Locked";
+            if ((res.getSW() & 0xFFF0) == 0x63C0) return "Failed: Retries left " + (res.getSW() & 0x0F);
+
+            return "Error: SW=" + Integer.toHexString(res.getSW());
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // --- LẤY CARD ID (PUBLIC) ---
+    public String getCardId() {
+        if (channel == null) return "Error: Card not connected";
+        try {
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_CARD_ID, 0x00, 0x00, 256);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                return HexUtils.bytesToHex(res.getData());
+            }
+            return "Error: SW=" + Integer.toHexString(res.getSW());
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
 
     /**
      * Hàm nhận chuỗi Hex ảnh, cắt nhỏ và ghi log ra file
@@ -175,6 +268,109 @@ public class CardService {
 
         } catch (Exception e) {
             e.printStackTrace();
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Hàm Padding: Thêm byte 0x00 vào cuối để độ dài chia hết cho 16
+     */
+    private byte[] padData(byte[] data) {
+        int dataLen = data.length;
+        int paddingLen = AES_BLOCK_SIZE - (dataLen % AES_BLOCK_SIZE);
+        // Nếu vừa khít (paddingLen == 16) thì có thể không cần pad,
+        // nhưng chuẩn PKCS5/7 thường pad thêm 1 block.
+        // Ở đây ta dùng Zero Padding đơn giản cho tiết kiệm bộ nhớ thẻ:
+        // Nếu thiếu thì bù, nếu đủ thì thôi (paddingLen = 0 hoặc 16 -> 0).
+        if (paddingLen == AES_BLOCK_SIZE) paddingLen = 0;
+
+        int totalLen = dataLen + paddingLen;
+        byte[] paddedData = new byte[totalLen];
+
+        System.arraycopy(data, 0, paddedData, 0, dataLen);
+        // Các byte còn lại mặc định là 0x00 (trong Java new byte[] đã là 0)
+
+        return paddedData;
+    }
+
+    /**
+     * Gửi thông tin User xuống thẻ (Có PIN để mã hóa)
+     */
+    public String updateUserInfo(String pin, String userInfoString) {
+        if (channel == null) return "Error: Card not connected";
+
+        try {
+            // 1. Chuẩn bị PIN
+            byte[] pinBytes = pin.getBytes();
+            int pinLen = pinBytes.length;
+
+            // 2. Chuẩn bị Data (Padding)
+            // Lưu ý: Java Card thường hỗ trợ ASCII tốt nhất. Nếu dùng UTF-8 tiếng Việt có dấu
+            // có thể tốn nhiều byte hơn dự kiến. Tạm thời dùng getBytes() mặc định hoặc UTF-8.
+            byte[] rawData = userInfoString.getBytes("UTF-8");
+            byte[] paddedData = padData(rawData);
+
+            // 3. Ghép Payload: [PIN_LEN] + [PIN] + [PADDED_DATA]
+            int totalLen = 1 + pinLen + paddedData.length;
+
+            // Kiểm tra kích thước APDU (Max 255)
+            // Nếu tổng lớn hơn 255, ta phải chia gói (Chunking) giống hệt Upload ảnh.
+            // Nhưng để đơn giản cho Demo Lần 1, ta giả sử info ngắn (<240 bytes).
+            if (totalLen > MAX_APDU_DATA_SIZE) {
+                return "Error: Data too long (" + totalLen + "). Chunking needed.";
+            }
+
+            byte[] payload = new byte[totalLen];
+            int offset = 0;
+
+            payload[offset++] = (byte) pinLen; // Byte đầu: Độ dài PIN
+            System.arraycopy(pinBytes, 0, payload, offset, pinLen); // Copy PIN
+            offset += pinLen;
+
+            System.arraycopy(paddedData, 0, payload, offset, paddedData.length); // Copy Data
+
+            // 4. Gửi lệnh
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_SET_INFO, 0x00, 0x00, payload);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                return "Success";
+            } else {
+                return "Error: SW=" + Integer.toHexString(res.getSW());
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // --- LẤY THÔNG TIN BẢO MẬT (SECURE GET INFO) ---
+    // Cần PIN để giải mã AES
+    public String getSecureInfo(String pin) {
+        if (channel == null) return "Error: Card not connected";
+        try {
+            byte[] pinBytes = pin.getBytes();
+            int pinLen = pinBytes.length;
+
+            // Payload: [PIN_LEN] [PIN]
+            byte[] payload = new byte[1 + pinLen];
+            payload[0] = (byte) pinLen;
+            System.arraycopy(pinBytes, 0, payload, 1, pinLen);
+
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_INFO_SECURE, 0x00, 0x00, payload, 256); // Le=256
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                // Dữ liệu nhận về là Plaintext (đã giải mã) nhưng có thể còn padding 0x00
+                byte[] data = res.getData();
+                // Cắt bỏ padding (tìm byte 0 đầu tiên từ cuối lên hoặc cứ new String rồi trim)
+                String info = new String(data, "UTF-8").trim();
+                return info;
+            } else {
+                return "Error: SW=" + Integer.toHexString(res.getSW());
+            }
+        } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
     }
