@@ -21,16 +21,33 @@ public class CardService {
     private static final int MAX_APDU_DATA_SIZE = 240;
     // Lệnh ghi ảnh (INS_WRITE_IMAGE)
     private static final int INS_WRITE_IMAGE_INT = 0x10;
+    private static final int INS_READ_IMAGE_INT = 0x11;
     private static final int APPLET_MAX_IMAGE_SIZE = 4096;
 
     private static final int INS_SET_INFO = 0x21; // Lệnh Update Info
-    private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
+//    private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
     private static final int AES_BLOCK_SIZE = 16;
 
     private static final int INS_REGISTER = 0x01;
     private static final int INS_VERIFY_PIN = 0x02;
     private static final int INS_GET_CARD_ID = 0x06;
     private static final int INS_GET_INFO_SECURE = 0x22;
+    private static final byte INS_CHANGE_PIN = (byte) 0x04;
+    private static final byte INS_UNBLOCK_PIN = (byte) 0x05;
+
+    public static class PinResponse {
+        public boolean success;
+        public String message;
+        public int remainingTries;
+        public String sw;
+
+        public PinResponse(boolean success, String message, int remainingTries, String sw) {
+            this.success = success;
+            this.message = message;
+            this.remainingTries = remainingTries;
+            this.sw = sw;
+        }
+    }
 
     public boolean connect() {
         try {
@@ -157,21 +174,37 @@ public class CardService {
     }
 
     // --- XÁC THỰC PIN (VERIFY) ---
-    public String verifyPin(String pin) {
-        if (channel == null) return "Error: Card not connected";
+    public PinResponse verifyPin(String pin) {
+        if (channel == null) return new PinResponse(false, "Card not connected", -1, "");
+
         try {
             byte[] pinBytes = pin.getBytes();
-            // Lệnh Verify thường gửi raw PIN luôn
             CommandAPDU cmd = new CommandAPDU(0xA0, INS_VERIFY_PIN, 0x00, 0x00, pinBytes);
             ResponseAPDU res = channel.transmit(cmd);
 
-            if (res.getSW() == 0x9000) return "Success";
-            if (res.getSW() == 0x6983) return "Locked";
-            if ((res.getSW() & 0xFFF0) == 0x63C0) return "Failed: Retries left " + (res.getSW() & 0x0F);
+            int sw = res.getSW();
 
-            return "Error: SW=" + Integer.toHexString(res.getSW());
+            // 1. Thành công
+            if (sw == 0x9000) {
+                return new PinResponse(true, "Success", 3, "9000");
+            }
+
+            // 2. Bị khóa (0x6983 - File Invalid / Blocked)
+            if (sw == 0x6983) {
+                return new PinResponse(false, "Locked", 0, "6983");
+            }
+
+            // 3. Sai PIN (0x63Cx)
+            if ((sw & 0xFFF0) == 0x63C0) {
+                int tries = sw & 0x0F;
+                return new PinResponse(false, "Wrong PIN", tries, Integer.toHexString(sw));
+            }
+
+            // Các lỗi khác
+            return new PinResponse(false, "Error SW=" + Integer.toHexString(sw), -1, Integer.toHexString(sw));
+
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            return new PinResponse(false, "Exception: " + e.getMessage(), -1, "");
         }
     }
 
@@ -179,11 +212,27 @@ public class CardService {
     public String getCardId() {
         if (channel == null) return "Error: Card not connected";
         try {
-            CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_CARD_ID, 0x00, 0x00, 256);
+            // Le = 9 (8 ID + 1 Status)
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_CARD_ID, 0x00, 0x00, 9);
             ResponseAPDU res = channel.transmit(cmd);
 
             if (res.getSW() == 0x9000) {
-                return HexUtils.bytesToHex(res.getData());
+                byte[] data = res.getData();
+                if (data.length < 9) return "Error: Invalid Response Length";
+
+                // 8 Byte đầu là ID
+                byte[] idBytes = new byte[8];
+                System.arraycopy(data, 0, idBytes, 0, 8);
+                String cardId = HexUtils.bytesToHex(idBytes);
+
+                // Byte cuối là Status
+                byte status = data[8];
+
+                if (status == 0x01) {
+                    return cardId + ".BLOCKED"; // Chiều theo ý huynh!
+                } else {
+                    return cardId;
+                }
             }
             return "Error: SW=" + Integer.toHexString(res.getSW());
         } catch (Exception e) {
@@ -268,6 +317,56 @@ public class CardService {
 
         } catch (Exception e) {
             e.printStackTrace();
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Đọc ảnh từ thẻ (Ghép chunk)
+     * @return Chuỗi Hex dài chứa toàn bộ dữ liệu ảnh
+     */
+    public String readImageFromCard() {
+        if (channel == null) return "Error: Card not connected";
+
+        StringBuilder fullImageHex = new StringBuilder();
+        int offset = 0;
+        int chunkSize = 240; // Đọc tối đa mỗi lần (Le)
+
+        try {
+            while (offset < APPLET_MAX_IMAGE_SIZE) {
+                // 1. Tính P1, P2 (Offset)
+                int p1 = (offset >> 8) & 0xFF;
+                int p2 = offset & 0xFF;
+
+                // 2. Gửi lệnh READ (Le = chunkSize)
+                // CLA=A0, INS=11, P1, P2
+                CommandAPDU cmd = new CommandAPDU(0xA0, INS_READ_IMAGE_INT, p1, p2, chunkSize);
+                ResponseAPDU res = channel.transmit(cmd);
+
+                // 3. Kiểm tra phản hồi
+                if (res.getSW() == 0x9000) {
+                    byte[] data = res.getData();
+                    if (data.length == 0) break; // Không còn dữ liệu
+
+                    // Append vào kết quả
+                    fullImageHex.append(HexUtils.bytesToHex(data));
+
+                    offset += data.length;
+
+                    // Nếu đọc được ít hơn chunkSize nghĩa là đã đến cuối ảnh
+                    if (data.length < chunkSize) break;
+
+                } else if (res.getSW() == 0x6700) {
+                    // 0x6700 (Wrong Length) = Applet báo hiệu hết ảnh (bytesToSend <= 0)
+                    break;
+                } else {
+                    return "Error: Read Failed SW=" + Integer.toHexString(res.getSW());
+                }
+            }
+
+            return fullImageHex.toString();
+
+        } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
     }
@@ -372,6 +471,75 @@ public class CardService {
             }
         } catch (Exception e) {
             return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * CHANGE PIN
+     * Logic Applet: Yêu cầu 'isValidated' -> Phải verify PIN cũ trước, sau đó mới gửi lệnh đổi PIN.
+     */
+    public PinResponse changePin(String oldPin, String newPin) {
+        if (channel == null) return new PinResponse(false, "Card not connected", -1, "");
+
+        try {
+            byte[] oldPinBytes = oldPin.getBytes();
+            byte[] newPinBytes = newPin.getBytes();
+
+            // Payload: [OldLen] [OldPin] [NewLen] [NewPin]
+            int payloadLen = 1 + oldPinBytes.length + 1 + newPinBytes.length;
+            byte[] payload = new byte[payloadLen];
+
+            int offset = 0;
+            payload[offset++] = (byte) oldPinBytes.length;
+            System.arraycopy(oldPinBytes, 0, payload, offset, oldPinBytes.length);
+            offset += oldPinBytes.length;
+
+            payload[offset++] = (byte) newPinBytes.length;
+            System.arraycopy(newPinBytes, 0, payload, offset, newPinBytes.length);
+
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_CHANGE_PIN, 0x00, 0x00, payload);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            int sw = res.getSW();
+            if (sw == 0x9000) {
+                return new PinResponse(true, "PIN Changed & Data Re-encrypted", 3, "9000");
+            }
+
+            // Xử lý lỗi sai PIN cũ (63Cx) trả về từ Applet
+            if ((sw & 0xFFF0) == 0x63C0) {
+                int tries = sw & 0x0F;
+                return new PinResponse(false, "Old PIN Incorrect", tries, Integer.toHexString(sw));
+            }
+
+            if (sw == 0x6983) return new PinResponse(false, "Card Locked", 0, "6983");
+
+            return new PinResponse(false, "Change Failed SW=" + Integer.toHexString(sw), -1, Integer.toHexString(sw));
+        } catch (Exception e) {
+            return new PinResponse(false, "Exception: " + e.getMessage(), -1, "");
+        }
+    }
+
+    /**
+     * UNBLOCK PIN (Reset)
+     * Applet Logic: Reset về 123456
+     */
+    public PinResponse unblockPin() {
+        if (channel == null) return new PinResponse(false, "Card not connected", -1, "");
+
+        try {
+            // Lệnh này thường cần quyền Admin hoặc Secure Channel,
+            // nhưng trong Demo Applet thì đang mở (public) nên gọi là được.
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_UNBLOCK_PIN, 0x00, 0x00);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                return new PinResponse(true, "PIN Reset to Default (123456)", 3, "9000");
+            } else {
+                return new PinResponse(false, "Unblock Failed SW=" + Integer.toHexString(res.getSW()), -1, Integer.toHexString(res.getSW()));
+            }
+
+        } catch (Exception e) {
+            return new PinResponse(false, "Exception: " + e.getMessage(), -1, "");
         }
     }
 }

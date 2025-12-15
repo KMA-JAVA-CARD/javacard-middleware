@@ -33,6 +33,11 @@ public class Main {
         // Có thể thêm email...
     }
 
+    class ChangePinRequest {
+        String oldPin;
+        String newPin;
+    }
+
     public static void main(String[] args) throws IOException {
         int port = 8081;
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -76,7 +81,7 @@ public class Main {
 
                     String result = cardService.registerCard(req.pin);
                     // Result đã là JSON string rồi hoặc Error message
-                    boolean isJson = result.startsWith("{");
+//                    boolean isJson = result.startsWith("{");
                     sendResponse(exchange, result.startsWith("Error") ? 500 : 200, result);
                 }
             }
@@ -90,8 +95,12 @@ public class Main {
                     String json = new String(exchange.getRequestBody().readAllBytes());
                     PinRequest req = gson.fromJson(json, PinRequest.class);
 
-                    String result = cardService.verifyPin(req.pin);
-                    sendResponse(exchange, result.startsWith("Success") ? 200 : 401, result);
+                    CardService.PinResponse response = cardService.verifyPin(req.pin);
+
+                    // Trả về JSON full object
+                    String jsonRes = gson.toJson(response);
+                    // Luôn trả 200 để Client nhận được JSON xử lý logic (trừ khi lỗi mạng sập)
+                    sendResponse(exchange, 200, jsonRes);
                 }
             }
         });
@@ -191,6 +200,52 @@ public class Main {
             }
         });
 
+        server.createContext("/read-image", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("GET".equals(exchange.getRequestMethod())) {
+                    String result = cardService.readImageFromCard();
+
+                    // Nếu thành công trả về Hex, nếu lỗi trả về Error message
+                    int status = result.startsWith("Error") ? 500 : 200;
+                    sendResponse(exchange, status, result);
+                }
+            }
+        });
+
+        server.createContext("/change-pin", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    String json = new String(exchange.getRequestBody().readAllBytes());
+                    ChangePinRequest req = gson.fromJson(json, ChangePinRequest.class);
+
+                    if (req.oldPin == null || req.newPin == null) {
+                        sendResponse(exchange, 400, "Missing PIN");
+                        return;
+                    }
+
+                    CardService.PinResponse response = cardService.changePin(req.oldPin, req.newPin);
+                    String jsonRes = gson.toJson(response);
+                    sendResponse(exchange, 200, jsonRes);
+                }
+            }
+        });
+
+        server.createContext("/unblock-pin", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    CardService.PinResponse response = cardService.unblockPin();
+                    String jsonRes = gson.toJson(response);
+                    sendResponse(exchange, 200, jsonRes);
+                }
+            }
+        });
+
         server.setExecutor(null);
         server.start();
         System.out.println("Java Middleware is running on port " + port);
@@ -206,15 +261,17 @@ public class Main {
     }
 
     private static void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
-        // Trả về JSON đơn giản
-        Map<String, String> map = new HashMap<>();
-        map.put("result", response);
-        String json = gson.toJson(map);
+        String finalJson = response;
+        if (!response.trim().startsWith("{")) {
+            Map<String, String> map = new HashMap<>();
+            map.put("result", response);
+            finalJson = gson.toJson(map);
+        }
 
         exchange.getResponseHeaders().set("Content-Type", "application/json");
-        exchange.sendResponseHeaders(statusCode, json.getBytes().length);
+        exchange.sendResponseHeaders(statusCode, finalJson.getBytes().length);
         OutputStream os = exchange.getResponseBody();
-        os.write(json.getBytes());
+        os.write(finalJson.getBytes());
         os.close();
     }
 }
