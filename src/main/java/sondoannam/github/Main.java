@@ -33,10 +33,12 @@ public class Main {
         // Có thể thêm email...
     }
 
-    class ChangePinRequest {
+    static class ChangePinRequest {
         String oldPin;
         String newPin;
     }
+
+    static class ChallengeRequest { String challenge; }
 
     public static void main(String[] args) throws IOException {
         int port = 8081;
@@ -112,6 +114,27 @@ public class Main {
                 if ("GET".equals(exchange.getRequestMethod())) {
                     String result = cardService.getCardId();
                     sendResponse(exchange, result.startsWith("Error") ? 500 : 200, result);
+                }
+            }
+        });
+
+        // API KÝ CHALLENGE
+        server.createContext("/sign-challenge", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    // Body: { "challenge": "AABBCC..." }
+                    String json = new String(exchange.getRequestBody().readAllBytes());
+                    // Tái sử dụng class UploadRequest vì nó cũng có 1 trường string (hoặc tạo class mới ChallengeRequest)
+                    // Ở đây ta giả sử huynh tạo class ChallengeRequest { String challenge; } cho rõ ràng
+                    ChallengeRequest req = gson.fromJson(json, ChallengeRequest.class);
+
+                    String result = cardService.signChallenge(req.challenge);
+
+                    // Xử lý kết quả trả về JSON
+                    int status = result.startsWith("Error") ? 400 : 200;
+                    sendResponse(exchange, status, result);
                 }
             }
         });

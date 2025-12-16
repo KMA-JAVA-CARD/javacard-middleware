@@ -35,6 +35,8 @@ public class CardService {
     private static final byte INS_CHANGE_PIN = (byte) 0x04;
     private static final byte INS_UNBLOCK_PIN = (byte) 0x05;
 
+    private static final int INS_SIGN_CHALLENGE = 0x33;
+
     public static class PinResponse {
         public boolean success;
         public String message;
@@ -235,6 +237,37 @@ public class CardService {
                 }
             }
             return "Error: SW=" + Integer.toHexString(res.getSW());
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Gửi Challenge xuống thẻ để ký
+     * @param challengeHex Chuỗi ngẫu nhiên (Hex) từ Server
+     * @return Chữ ký (Signature Hex) hoặc Lỗi
+     */
+    public String signChallenge(String challengeHex) {
+        if (channel == null) return "Error: Card not connected";
+
+        try {
+            byte[] challengeBytes = HexUtils.hexToBytes(challengeHex);
+
+            // Lệnh SIGN: CLA=A0, INS=33, P1=0, P2=0, Data=Challenge
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_SIGN_CHALLENGE, 0x00, 0x00, challengeBytes);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                // Trả về chữ ký (Hex)
+                return HexUtils.bytesToHex(res.getData());
+            }
+            else if (res.getSW() == 0x6982) { // SW_SECURITY_STATUS_NOT_SATISFIED
+                return "Error: PIN Required"; // Chưa nhập PIN mà đòi ký
+            }
+            else {
+                return "Error: Sign Failed SW=" + Integer.toHexString(res.getSW());
+            }
+
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
