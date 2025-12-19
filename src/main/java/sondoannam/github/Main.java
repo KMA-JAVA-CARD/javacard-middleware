@@ -40,6 +40,8 @@ public class Main {
 
     static class ChallengeRequest { String challenge; }
 
+    static class UpdatePointsRequest { int points; }
+
     public static void main(String[] args) throws IOException {
         int port = 8081;
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -168,6 +170,26 @@ public class Main {
 
                     } catch (Exception e) {
                         e.printStackTrace();
+                        sendResponse(exchange, 400, "Error: " + e.getMessage());
+                    }
+                }
+            }
+        });
+
+        server.createContext("/update-points", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    try {
+                        String jsonBody = new String(exchange.getRequestBody().readAllBytes()).trim();
+                        UpdatePointsRequest req = gson.fromJson(jsonBody, UpdatePointsRequest.class);
+
+                        String result = cardService.updatePoints(req.points);
+
+                        int status = result.startsWith("Success") ? 200 : 500;
+                        sendResponse(exchange, status, result);
+                    } catch (Exception e) {
                         sendResponse(exchange, 400, "Error: " + e.getMessage());
                     }
                 }

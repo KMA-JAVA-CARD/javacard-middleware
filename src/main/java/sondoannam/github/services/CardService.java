@@ -5,8 +5,8 @@ import sondoannam.github.utils.HexUtils;
 import javax.smartcardio.*;
 import java.io.BufferedWriter;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -25,7 +25,7 @@ public class CardService {
     private static final int APPLET_MAX_IMAGE_SIZE = 4096;
 
     private static final int INS_SET_INFO = 0x21; // Lệnh Update Info
-//    private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
+    //    private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
     private static final int AES_BLOCK_SIZE = 16;
 
     private static final int INS_REGISTER = 0x01;
@@ -36,6 +36,9 @@ public class CardService {
     private static final byte INS_UNBLOCK_PIN = (byte) 0x05;
 
     private static final int INS_SIGN_CHALLENGE = 0x33;
+
+    private static final int INS_GET_POINTS = 0x40;
+    private static final int INS_UPDATE_POINTS = 0x41;
 
     public static class PinResponse {
         public boolean success;
@@ -152,14 +155,14 @@ public class CardService {
 
                 // 2. Lấy Modulus
                 int modLenIdx = 8;
-                int modLen = ((data[modLenIdx] & 0xFF) << 8) | (data[modLenIdx+1] & 0xFF);
+                int modLen = ((data[modLenIdx] & 0xFF) << 8) | (data[modLenIdx + 1] & 0xFF);
                 byte[] modBytes = new byte[modLen];
                 System.arraycopy(data, modLenIdx + 2, modBytes, 0, modLen);
                 String modulus = HexUtils.bytesToHex(modBytes);
 
                 // 3. Lấy Exponent
                 int expLenIdx = modLenIdx + 2 + modLen;
-                int expLen = ((data[expLenIdx] & 0xFF) << 8) | (data[expLenIdx+1] & 0xFF);
+                int expLen = ((data[expLenIdx] & 0xFF) << 8) | (data[expLenIdx + 1] & 0xFF);
                 byte[] expBytes = new byte[expLen];
                 System.arraycopy(data, expLenIdx + 2, expBytes, 0, expLen);
                 String exponent = HexUtils.bytesToHex(expBytes);
@@ -244,6 +247,7 @@ public class CardService {
 
     /**
      * Gửi Challenge xuống thẻ để ký
+     *
      * @param challengeHex Chuỗi ngẫu nhiên (Hex) từ Server
      * @return Chữ ký (Signature Hex) hoặc Lỗi
      */
@@ -260,11 +264,9 @@ public class CardService {
             if (res.getSW() == 0x9000) {
                 // Trả về chữ ký (Hex)
                 return HexUtils.bytesToHex(res.getData());
-            }
-            else if (res.getSW() == 0x6982) { // SW_SECURITY_STATUS_NOT_SATISFIED
+            } else if (res.getSW() == 0x6982) { // SW_SECURITY_STATUS_NOT_SATISFIED
                 return "Error: PIN Required"; // Chưa nhập PIN mà đòi ký
-            }
-            else {
+            } else {
                 return "Error: Sign Failed SW=" + Integer.toHexString(res.getSW());
             }
 
@@ -275,6 +277,7 @@ public class CardService {
 
     /**
      * Hàm nhận chuỗi Hex ảnh, cắt nhỏ và ghi log ra file
+     *
      * @param hexImage Chuỗi Hex dài của ảnh (4096 bytes ~ 8192 ký tự hex)
      * @return Thông báo kết quả
      */
@@ -356,6 +359,7 @@ public class CardService {
 
     /**
      * Đọc ảnh từ thẻ (Ghép chunk)
+     *
      * @return Chuỗi Hex dài chứa toàn bộ dữ liệu ảnh
      */
     public String readImageFromCard() {
@@ -402,6 +406,19 @@ public class CardService {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
+    }
+
+    private int getPointsInternal() throws CardException {
+        CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_POINTS, 0x00, 0x00);
+        ResponseAPDU resp = channel.transmit(cmd);
+
+        if (resp.getSW() == 0x9000) {
+            byte[] data = resp.getData();
+            // Convert 2 bytes -> int
+            // data[0] là High byte, data[1] là Low byte
+            return ((data[0] & 0xFF) << 8) | (data[1] & 0xFF);
+        }
+        return -1; // Lỗi
     }
 
     /**
@@ -493,15 +510,43 @@ public class CardService {
             CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_INFO_SECURE, 0x00, 0x00, payload, 256); // Le=256
             ResponseAPDU res = channel.transmit(cmd);
 
-            if (res.getSW() == 0x9000) {
-                // Dữ liệu nhận về là Plaintext (đã giải mã) nhưng có thể còn padding 0x00
-                byte[] data = res.getData();
-                // Cắt bỏ padding (tìm byte 0 đầu tiên từ cuối lên hoặc cứ new String rồi trim)
-                String info = new String(data, "UTF-8").trim();
-                return info;
-            } else {
+            if (res.getSW() != 0x9000) {
                 return "Error: SW=" + Integer.toHexString(res.getSW());
             }
+
+            // Dữ liệu nhận về là Plaintext (đã giải mã) nhưng có thể còn padding 0x00
+            String infoString = new String(res.getData(), StandardCharsets.UTF_8).trim();
+
+            int points = getPointsInternal();
+
+            if (points == -1) points = 0;
+
+            return infoString + '|' + points;
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    public String updatePoints(int newPoints) {
+        if (channel == null) return "Error: Card not connected";
+        try {
+            // Chuyển int -> 2 bytes array
+            byte[] data = new byte[2];
+            data[0] = (byte) ((newPoints >> 8) & 0xFF); // High byte
+            data[1] = (byte) (newPoints & 0xFF);        // Low byte
+
+            // APDU: [CLA] [INS] [P1] [P2] [Lc] [DATA]
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_UPDATE_POINTS, 0x00, 0x00, data);
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                return "Success";
+            } else if (res.getSW() == 0x6982) { // Security Status Not Satisfied
+                return "Error: Need Verify PIN first";
+            } else {
+                return "Error: Update Failed SW=" + Integer.toHexString(res.getSW());
+            }
+
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
