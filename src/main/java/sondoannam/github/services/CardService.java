@@ -27,7 +27,7 @@ public class CardService {
     // Lệnh ghi ảnh (INS_WRITE_IMAGE)
     private static final int INS_WRITE_IMAGE_INT = 0x10;
     private static final int INS_READ_IMAGE_INT = 0x11;
-    private static final int APPLET_MAX_IMAGE_SIZE = 4096;
+    private static final int APPLET_MAX_IMAGE_SIZE = 4200;
 
     private static final int INS_SET_INFO = 0x21; // Lệnh Update Info
     //    private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
