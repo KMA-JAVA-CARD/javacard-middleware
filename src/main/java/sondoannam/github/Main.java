@@ -18,6 +18,7 @@ public class Main {
 
     static class UploadRequest {
         String hexData;
+        String pin;
     }
 
     static class PinRequest {
@@ -232,7 +233,7 @@ public class Main {
                         // Log kiểm tra lại lần cuối
                         System.out.println("[INFO] Nhận yêu cầu upload ảnh. Độ dài Hex: " + realHexData.length());
 
-                        String result = cardService.uploadImageToCard(realHexData);
+                        String result = cardService.uploadImageToCard(realHexData, request.pin);
 
                         int status = result.startsWith("Success") ? 200 : 500;
                         sendResponse(exchange, status, result);
@@ -249,12 +250,28 @@ public class Main {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
                 handleCORS(exchange);
-                if ("GET".equals(exchange.getRequestMethod())) {
-                    String result = cardService.readImageFromCard();
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    try {
+                        String jsonBody = new String(exchange.getRequestBody().readAllBytes());
+                        // Tái sử dụng class PinRequest có sẵn (chứa field "pin")
+                        PinRequest req = gson.fromJson(jsonBody, PinRequest.class);
 
-                    // Nếu thành công trả về Hex, nếu lỗi trả về Error message
-                    int status = result.startsWith("Error") ? 500 : 200;
-                    sendResponse(exchange, status, result);
+                        if (req.pin == null || req.pin.isEmpty()) {
+                            sendResponse(exchange, 400, "Error: PIN is required to decrypt image");
+                            return;
+                        }
+
+                        // Gọi hàm đọc + giải mã
+                        String result = cardService.readImageFromCard(req.pin);
+
+                        // Nếu thành công trả về Hex ảnh gốc, nếu lỗi trả về Error message
+                        int status = result.startsWith("Error") ? 500 : 200;
+                        sendResponse(exchange, status, result);
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        sendResponse(exchange, 400, "Error: " + e.getMessage());
+                    }
                 }
             }
         });

@@ -11,6 +11,11 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
+import java.security.MessageDigest;
+import java.util.Arrays;
+
 public class CardService {
     private Card card;
     private CardChannel channel;
@@ -275,85 +280,110 @@ public class CardService {
         }
     }
 
+    // Hàm tạo khóa AES từ PIN (Giống logic trên thẻ Applet)
+    private byte[] generateKeyFromPin(String pin) throws Exception {
+        MessageDigest sha = MessageDigest.getInstance("SHA-256");
+        byte[] key = sha.digest(pin.getBytes("UTF-8"));
+        // Lấy 16 byte đầu làm khóa 128-bit (giống Applet)
+        return Arrays.copyOf(key, 16);
+    }
+
+    // Mã hóa dữ liệu ảnh
+    private byte[] encryptAES(byte[] data, String pin) throws Exception {
+        byte[] key = generateKeyFromPin(pin);
+        SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
+        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding"); // Java dùng PKCS5Padding tương đương thẻ
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+        return cipher.doFinal(data);
+    }
+
+    // Giải mã dữ liệu ảnh
+    private byte[] decryptAES(byte[] encryptedData, String pin) throws Exception {
+        byte[] key = generateKeyFromPin(pin);
+        SecretKeySpec secretKey = new SecretKeySpec(key, "AES");
+        Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+        cipher.init(Cipher.DECRYPT_MODE, secretKey);
+        return cipher.doFinal(encryptedData);
+    }
+
     /**
      * Hàm nhận chuỗi Hex ảnh, cắt nhỏ và ghi log ra file
      *
      * @param hexImage Chuỗi Hex dài của ảnh (4096 bytes ~ 8192 ký tự hex)
      * @return Thông báo kết quả
      */
-    public String uploadImageToCard(String hexImage) {
+    public String uploadImageToCard(String hexImage, String pin) {
         if (channel == null) return "Error: Card not connected";
 
-        byte[] imageData;
+        byte[] originalBytes;
         try {
-            imageData = HexUtils.hexToBytes(hexImage);
+            originalBytes = HexUtils.hexToBytes(hexImage);
         } catch (IllegalArgumentException e) {
             return "Error: Invalid Hex String";
         }
 
-        int totalBytes = imageData.length;
+        try {
+            // --- BƯỚC MỚI: MÃ HÓA DỮ LIỆU ---
+            System.out.println("[INFO] Đang mã hóa ảnh với PIN...");
+            byte[] encryptedBytes = encryptAES(originalBytes, pin);
 
-        if (totalBytes > APPLET_MAX_IMAGE_SIZE) {
-            System.out.println("[WARN] Ảnh quá lớn (" + totalBytes + "), đang cắt xuống " + APPLET_MAX_IMAGE_SIZE);
-            // Tạo mảng mới đúng kích thước chuẩn
-            byte[] trimmedData = new byte[APPLET_MAX_IMAGE_SIZE];
-            System.arraycopy(imageData, 0, trimmedData, 0, APPLET_MAX_IMAGE_SIZE);
+            // Log so sánh kích thước
+            System.out.println("   > Original size: " + originalBytes.length + " bytes");
+            System.out.println("   > Encrypted size: " + encryptedBytes.length + " bytes");
 
-            // Gán lại để xử lý
-            imageData = trimmedData;
-            totalBytes = APPLET_MAX_IMAGE_SIZE;
-        }
-
-        String logFileName = "debug_image_chunks.txt";
-
-        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(logFileName, true)))) {
-            String timeStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            writer.println("\n=== REAL UPLOAD TO CARD - " + timeStamp + " ===");
-
-            int offset = 0;
-            int chunkIndex = 0;
-
-            while (offset < totalBytes) {
-                // 1. Cắt gói
-                int len = Math.min(MAX_APDU_DATA_SIZE, totalBytes - offset);
-                byte[] chunkData = new byte[len];
-                System.arraycopy(imageData, offset, chunkData, 0, len);
-
-                // 2. Tính P1, P2
-                int p1 = (offset >> 8) & 0xFF;
-                int p2 = offset & 0xFF;
-
-                // 3. Ghi log debug
-                writer.printf("Packet #%d (Offset %d): Len=%d\n", chunkIndex, offset, len);
-
-                // 4. GỬI LỆNH XUỐNG THẺ THẬT
-                // CLA=A0, INS=10, P1, P2, Data
-                CommandAPDU cmd = new CommandAPDU(0xA0, INS_WRITE_IMAGE_INT, p1, p2, chunkData);
-
-                long startTime = System.currentTimeMillis();
-                ResponseAPDU res = channel.transmit(cmd);
-                long duration = System.currentTimeMillis() - startTime;
-
-                // 5. Kiểm tra phản hồi
-                if (res.getSW() != 0x9000) {
-                    String errorMsg = "Upload Failed at offset " + offset + " SW=" + Integer.toHexString(res.getSW());
-                    writer.println(">> ERROR: " + errorMsg);
-                    System.out.println(errorMsg);
-                    return errorMsg;
-                }
-
-                writer.println(">> Success (Time: " + duration + "ms)");
-
-                offset += len;
-                chunkIndex++;
+            // Kiểm tra kích thước sau khi mã hóa
+            // (Không được cắt cụt dữ liệu encrypted vì sẽ hỏng file)
+            if (encryptedBytes.length > APPLET_MAX_IMAGE_SIZE) {
+                return "Error: Image too large after encryption (" + encryptedBytes.length + " > " + APPLET_MAX_IMAGE_SIZE + ")";
             }
 
-            writer.println("=== UPLOAD COMPLETE ===");
-            return "Success: Image uploaded to card (" + totalBytes + " bytes)";
+            // Dùng dữ liệu ĐÃ MÃ HÓA để gửi xuống thẻ
+            byte[] dataToSend = encryptedBytes;
+            int totalBytes = dataToSend.length;
+
+            String logFileName = "debug_image_chunks.txt";
+            try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(logFileName, true)))) {
+                String timeStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                writer.println("\n=== REAL UPLOAD (ENCRYPTED) - " + timeStamp + " ===");
+
+                int offset = 0;
+                int chunkIndex = 0;
+
+                while (offset < totalBytes) {
+                    // 1. Cắt gói (Chunking)
+                    int len = Math.min(MAX_APDU_DATA_SIZE, totalBytes - offset);
+                    byte[] chunkData = new byte[len];
+                    System.arraycopy(dataToSend, offset, chunkData, 0, len);
+
+                    // 2. Tính P1, P2
+                    int p1 = (offset >> 8) & 0xFF;
+                    int p2 = offset & 0xFF;
+
+                    // 3. Ghi log debug
+                    writer.printf("Packet #%d (Offset %d): Len=%d\n", chunkIndex, offset, len);
+
+                    // 4. GỬI LỆNH
+                    CommandAPDU cmd = new CommandAPDU(0xA0, INS_WRITE_IMAGE_INT, p1, p2, chunkData);
+                    ResponseAPDU res = channel.transmit(cmd);
+
+                    // 5. Kiểm tra phản hồi
+                    if (res.getSW() != 0x9000) {
+                        String errorMsg = "Upload Failed at offset " + offset + " SW=" + Integer.toHexString(res.getSW());
+                        writer.println(">> ERROR: " + errorMsg);
+                        return errorMsg;
+                    }
+
+                    offset += len;
+                    chunkIndex++;
+                }
+                writer.println("=== UPLOAD COMPLETE ===");
+            }
+
+            return "Success: Encrypted image uploaded (" + totalBytes + " bytes)";
 
         } catch (Exception e) {
             e.printStackTrace();
-            return "Error: " + e.getMessage();
+            return "Error encrypting/uploading: " + e.getMessage();
         }
     }
 
@@ -362,49 +392,54 @@ public class CardService {
      *
      * @return Chuỗi Hex dài chứa toàn bộ dữ liệu ảnh
      */
-    public String readImageFromCard() {
+    public String readImageFromCard(String pin) { // <--- Thêm tham số PIN
         if (channel == null) return "Error: Card not connected";
 
-        StringBuilder fullImageHex = new StringBuilder();
+        StringBuilder encryptedHexBuilder = new StringBuilder();
         int offset = 0;
-        int chunkSize = 240; // Đọc tối đa mỗi lần (Le)
+        int chunkSize = 240;
 
         try {
+            // --- BƯỚC 1: ĐỌC DỮ LIỆU RAW (ENCRYPTED) TỪ THẺ ---
             while (offset < APPLET_MAX_IMAGE_SIZE) {
-                // 1. Tính P1, P2 (Offset)
                 int p1 = (offset >> 8) & 0xFF;
                 int p2 = offset & 0xFF;
 
-                // 2. Gửi lệnh READ (Le = chunkSize)
-                // CLA=A0, INS=11, P1, P2
                 CommandAPDU cmd = new CommandAPDU(0xA0, INS_READ_IMAGE_INT, p1, p2, chunkSize);
                 ResponseAPDU res = channel.transmit(cmd);
 
-                // 3. Kiểm tra phản hồi
                 if (res.getSW() == 0x9000) {
                     byte[] data = res.getData();
-                    if (data.length == 0) break; // Không còn dữ liệu
+                    if (data.length == 0) break;
 
-                    // Append vào kết quả
-                    fullImageHex.append(HexUtils.bytesToHex(data));
-
+                    encryptedHexBuilder.append(HexUtils.bytesToHex(data));
                     offset += data.length;
 
-                    // Nếu đọc được ít hơn chunkSize nghĩa là đã đến cuối ảnh
                     if (data.length < chunkSize) break;
-
                 } else if (res.getSW() == 0x6700) {
-                    // 0x6700 (Wrong Length) = Applet báo hiệu hết ảnh (bytesToSend <= 0)
                     break;
                 } else {
                     return "Error: Read Failed SW=" + Integer.toHexString(res.getSW());
                 }
             }
 
-            return fullImageHex.toString();
+            String encryptedHex = encryptedHexBuilder.toString();
+            if (encryptedHex.isEmpty()) return "";
+
+            // --- BƯỚC 2: GIẢI MÃ ---
+            System.out.println("[INFO] Đọc xong raw hex, đang giải mã...");
+            byte[] encryptedBytes = HexUtils.hexToBytes(encryptedHex);
+
+            // Decrypt
+            byte[] decryptedBytes = decryptAES(encryptedBytes, pin);
+
+            // Trả về Hex của ảnh gốc
+            return HexUtils.bytesToHex(decryptedBytes);
 
         } catch (Exception e) {
-            return "Error: " + e.getMessage();
+            e.printStackTrace();
+            // Lỗi này thường do sai PIN dẫn đến sai Key giải mã -> Padding error
+            return "Error: Decryption failed (Wrong PIN?) - " + e.getMessage();
         }
     }
 
