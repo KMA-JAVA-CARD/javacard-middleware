@@ -25,7 +25,7 @@ public class CardService {
     private static final int APPLET_MAX_IMAGE_SIZE = 4096;
 
     private static final int INS_SET_INFO = 0x21; // Lệnh Update Info
-    //    private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
+    // private static final int INS_GET_INFO = 0x22; // Lệnh Get Info
     private static final int AES_BLOCK_SIZE = 16;
 
     private static final int INS_REGISTER = 0x01;
@@ -85,7 +85,8 @@ public class CardService {
     }
 
     public boolean selectApplet() {
-        if (channel == null) return false;
+        if (channel == null)
+            return false;
         try {
             CommandAPDU selectCmd = new CommandAPDU(0x00, 0xA4, 0x04, 0x00, APPLET_AID);
             ResponseAPDU res = channel.transmit(selectCmd);
@@ -98,7 +99,8 @@ public class CardService {
     }
 
     public String sendAPDU(String hexAPDU) {
-        if (channel == null) return "Error: No Connection";
+        if (channel == null)
+            return "Error: No Connection";
         try {
             byte[] cmdBytes = HexUtils.hexToBytes(hexAPDU);
             CommandAPDU cmd = new CommandAPDU(cmdBytes);
@@ -119,7 +121,8 @@ public class CardService {
 
     public void disconnect() {
         try {
-            if (card != null) card.disconnect(false);
+            if (card != null)
+                card.disconnect(false);
             System.out.println("[INFO] Đã ngắt kết nối thẻ.");
         } catch (Exception e) {
             e.printStackTrace();
@@ -130,7 +133,8 @@ public class CardService {
     // Input: PIN
     // Output: JSON String { "cardId": "...", "publicKey": "..." }
     public String registerCard(String pin) {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
         try {
             byte[] pinBytes = pin.getBytes();
             int pinLen = pinBytes.length;
@@ -146,7 +150,8 @@ public class CardService {
 
             if (res.getSW() == 0x9000) {
                 byte[] data = res.getData();
-                // Parse dữ liệu trả về: [CardID(8)] [LenMod(2)] [Modulus] [LenExp(2)] [Exponent]
+                // Parse dữ liệu trả về: [CardID(8)] [LenMod(2)] [Modulus] [LenExp(2)]
+                // [Exponent]
 
                 // 1. Lấy CardID
                 byte[] idBytes = new byte[8];
@@ -180,7 +185,8 @@ public class CardService {
 
     // --- XÁC THỰC PIN (VERIFY) ---
     public PinResponse verifyPin(String pin) {
-        if (channel == null) return new PinResponse(false, "Card not connected", -1, "");
+        if (channel == null)
+            return new PinResponse(false, "Card not connected", -1, "");
 
         try {
             byte[] pinBytes = pin.getBytes();
@@ -215,7 +221,8 @@ public class CardService {
 
     // --- LẤY CARD ID (PUBLIC) ---
     public String getCardId() {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
         try {
             // Le = 9 (8 ID + 1 Status)
             CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_CARD_ID, 0x00, 0x00, 9);
@@ -223,7 +230,8 @@ public class CardService {
 
             if (res.getSW() == 0x9000) {
                 byte[] data = res.getData();
-                if (data.length < 9) return "Error: Invalid Response Length";
+                if (data.length < 9)
+                    return "Error: Invalid Response Length";
 
                 // 8 Byte đầu là ID
                 byte[] idBytes = new byte[8];
@@ -252,7 +260,8 @@ public class CardService {
      * @return Chữ ký (Signature Hex) hoặc Lỗi
      */
     public String signChallenge(String challengeHex) {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
 
         try {
             byte[] challengeBytes = HexUtils.hexToBytes(challengeHex);
@@ -282,7 +291,8 @@ public class CardService {
      * @return Thông báo kết quả
      */
     public String uploadImageToCard(String hexImage) {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
 
         byte[] imageData;
         try {
@@ -363,7 +373,8 @@ public class CardService {
      * @return Chuỗi Hex dài chứa toàn bộ dữ liệu ảnh
      */
     public String readImageFromCard() {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
 
         StringBuilder fullImageHex = new StringBuilder();
         int offset = 0;
@@ -383,7 +394,8 @@ public class CardService {
                 // 3. Kiểm tra phản hồi
                 if (res.getSW() == 0x9000) {
                     byte[] data = res.getData();
-                    if (data.length == 0) break; // Không còn dữ liệu
+                    if (data.length == 0)
+                        break; // Không còn dữ liệu
 
                     // Append vào kết quả
                     fullImageHex.append(HexUtils.bytesToHex(data));
@@ -391,7 +403,8 @@ public class CardService {
                     offset += data.length;
 
                     // Nếu đọc được ít hơn chunkSize nghĩa là đã đến cuối ảnh
-                    if (data.length < chunkSize) break;
+                    if (data.length < chunkSize)
+                        break;
 
                 } else if (res.getSW() == 0x6700) {
                     // 0x6700 (Wrong Length) = Applet báo hiệu hết ảnh (bytesToSend <= 0)
@@ -409,7 +422,8 @@ public class CardService {
     }
 
     private int getPointsInternal() throws CardException {
-        CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_POINTS, 0x00, 0x00);
+        // Le = 2 để yêu cầu card trả về 2 bytes (points là short)
+        CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_POINTS, 0x00, 0x00, 2);
         ResponseAPDU resp = channel.transmit(cmd);
 
         if (resp.getSW() == 0x9000) {
@@ -431,7 +445,8 @@ public class CardService {
         // nhưng chuẩn PKCS5/7 thường pad thêm 1 block.
         // Ở đây ta dùng Zero Padding đơn giản cho tiết kiệm bộ nhớ thẻ:
         // Nếu thiếu thì bù, nếu đủ thì thôi (paddingLen = 0 hoặc 16 -> 0).
-        if (paddingLen == AES_BLOCK_SIZE) paddingLen = 0;
+        if (paddingLen == AES_BLOCK_SIZE)
+            paddingLen = 0;
 
         int totalLen = dataLen + paddingLen;
         byte[] paddedData = new byte[totalLen];
@@ -446,7 +461,8 @@ public class CardService {
      * Gửi thông tin User xuống thẻ (Có PIN để mã hóa)
      */
     public String updateUserInfo(String pin, String userInfoString) {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
 
         try {
             // 1. Chuẩn bị PIN
@@ -454,8 +470,10 @@ public class CardService {
             int pinLen = pinBytes.length;
 
             // 2. Chuẩn bị Data (Padding)
-            // Lưu ý: Java Card thường hỗ trợ ASCII tốt nhất. Nếu dùng UTF-8 tiếng Việt có dấu
-            // có thể tốn nhiều byte hơn dự kiến. Tạm thời dùng getBytes() mặc định hoặc UTF-8.
+            // Lưu ý: Java Card thường hỗ trợ ASCII tốt nhất. Nếu dùng UTF-8 tiếng Việt có
+            // dấu
+            // có thể tốn nhiều byte hơn dự kiến. Tạm thời dùng getBytes() mặc định hoặc
+            // UTF-8.
             byte[] rawData = userInfoString.getBytes("UTF-8");
             byte[] paddedData = padData(rawData);
 
@@ -497,7 +515,8 @@ public class CardService {
     // --- LẤY THÔNG TIN BẢO MẬT (SECURE GET INFO) ---
     // Cần PIN để giải mã AES
     public String getSecureInfo(String pin) {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
         try {
             byte[] pinBytes = pin.getBytes();
             int pinLen = pinBytes.length;
@@ -507,7 +526,7 @@ public class CardService {
             payload[0] = (byte) pinLen;
             System.arraycopy(pinBytes, 0, payload, 1, pinLen);
 
-            CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_INFO_SECURE, 0x00, 0x00, payload, 256); // Le=256
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_INFO_SECURE, 0x00, 0x00, payload);
             ResponseAPDU res = channel.transmit(cmd);
 
             if (res.getSW() != 0x9000) {
@@ -519,7 +538,8 @@ public class CardService {
 
             int points = getPointsInternal();
 
-            if (points == -1) points = 0;
+            if (points == -1)
+                points = 0;
 
             return infoString + '|' + points;
         } catch (Exception e) {
@@ -528,12 +548,13 @@ public class CardService {
     }
 
     public String updatePoints(int newPoints) {
-        if (channel == null) return "Error: Card not connected";
+        if (channel == null)
+            return "Error: Card not connected";
         try {
             // Chuyển int -> 2 bytes array
             byte[] data = new byte[2];
             data[0] = (byte) ((newPoints >> 8) & 0xFF); // High byte
-            data[1] = (byte) (newPoints & 0xFF);        // Low byte
+            data[1] = (byte) (newPoints & 0xFF); // Low byte
 
             // APDU: [CLA] [INS] [P1] [P2] [Lc] [DATA]
             CommandAPDU cmd = new CommandAPDU(0xA0, INS_UPDATE_POINTS, 0x00, 0x00, data);
@@ -554,10 +575,12 @@ public class CardService {
 
     /**
      * CHANGE PIN
-     * Logic Applet: Yêu cầu 'isValidated' -> Phải verify PIN cũ trước, sau đó mới gửi lệnh đổi PIN.
+     * Logic Applet: Yêu cầu 'isValidated' -> Phải verify PIN cũ trước, sau đó mới
+     * gửi lệnh đổi PIN.
      */
     public PinResponse changePin(String oldPin, String newPin) {
-        if (channel == null) return new PinResponse(false, "Card not connected", -1, "");
+        if (channel == null)
+            return new PinResponse(false, "Card not connected", -1, "");
 
         try {
             byte[] oldPinBytes = oldPin.getBytes();
@@ -589,7 +612,8 @@ public class CardService {
                 return new PinResponse(false, "Old PIN Incorrect", tries, Integer.toHexString(sw));
             }
 
-            if (sw == 0x6983) return new PinResponse(false, "Card Locked", 0, "6983");
+            if (sw == 0x6983)
+                return new PinResponse(false, "Card Locked", 0, "6983");
 
             return new PinResponse(false, "Change Failed SW=" + Integer.toHexString(sw), -1, Integer.toHexString(sw));
         } catch (Exception e) {
@@ -602,7 +626,8 @@ public class CardService {
      * Applet Logic: Reset về 123456
      */
     public PinResponse unblockPin() {
-        if (channel == null) return new PinResponse(false, "Card not connected", -1, "");
+        if (channel == null)
+            return new PinResponse(false, "Card not connected", -1, "");
 
         try {
             // Lệnh này thường cần quyền Admin hoặc Secure Channel,
@@ -613,7 +638,8 @@ public class CardService {
             if (res.getSW() == 0x9000) {
                 return new PinResponse(true, "PIN Reset to Default (123456)", 3, "9000");
             } else {
-                return new PinResponse(false, "Unblock Failed SW=" + Integer.toHexString(res.getSW()), -1, Integer.toHexString(res.getSW()));
+                return new PinResponse(false, "Unblock Failed SW=" + Integer.toHexString(res.getSW()), -1,
+                        Integer.toHexString(res.getSW()));
             }
 
         } catch (Exception e) {

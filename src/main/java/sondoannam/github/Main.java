@@ -30,7 +30,6 @@ public class Main {
         String dob;
         String address;
         String phone;
-        // Có thể thêm email...
     }
 
     static class ChangePinRequest {
@@ -38,9 +37,13 @@ public class Main {
         String newPin;
     }
 
-    static class ChallengeRequest { String challenge; }
+    static class ChallengeRequest {
+        String challenge;
+    }
 
-    static class UpdatePointsRequest { int points; }
+    static class UpdatePointsRequest {
+        int points;
+    }
 
     public static void main(String[] args) throws IOException {
         int port = 8081;
@@ -85,7 +88,7 @@ public class Main {
 
                     String result = cardService.registerCard(req.pin);
                     // Result đã là JSON string rồi hoặc Error message
-//                    boolean isJson = result.startsWith("{");
+                    // boolean isJson = result.startsWith("{");
                     sendResponse(exchange, result.startsWith("Error") ? 500 : 200, result);
                 }
             }
@@ -128,8 +131,10 @@ public class Main {
                 if ("POST".equals(exchange.getRequestMethod())) {
                     // Body: { "challenge": "AABBCC..." }
                     String json = new String(exchange.getRequestBody().readAllBytes());
-                    // Tái sử dụng class UploadRequest vì nó cũng có 1 trường string (hoặc tạo class mới ChallengeRequest)
-                    // Ở đây ta giả sử huynh tạo class ChallengeRequest { String challenge; } cho rõ ràng
+                    // Tái sử dụng class UploadRequest vì nó cũng có 1 trường string (hoặc tạo class
+                    // mới ChallengeRequest)
+                    // Ở đây ta giả sử huynh tạo class ChallengeRequest { String challenge; } cho rõ
+                    // ràng
                     ChallengeRequest req = gson.fromJson(json, ChallengeRequest.class);
 
                     String result = cardService.signChallenge(req.challenge);
@@ -217,7 +222,8 @@ public class Main {
                 if ("POST".equals(exchange.getRequestMethod())) {
                     String jsonBody = new String(exchange.getRequestBody().readAllBytes()).trim();
 
-                    System.out.println("[DEBUG] JSON Received: " + jsonBody.substring(0, Math.min(50, jsonBody.length())) + "...");
+                    System.out.println(
+                            "[DEBUG] JSON Received: " + jsonBody.substring(0, Math.min(50, jsonBody.length())) + "...");
 
                     try {
                         // 2. Dùng Gson để bóc tách lấy giá trị "hexData"
