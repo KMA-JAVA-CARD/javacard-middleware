@@ -308,6 +308,28 @@ public class Main {
             }
         });
 
+        server.createContext("/get-raw-data", new HttpHandler() {
+            @Override
+            public void handle(HttpExchange exchange) throws IOException {
+                handleCORS(exchange);
+                if ("GET".equals(exchange.getRequestMethod())) {
+                    // 1. Lấy Raw User Info
+                    String rawInfo = cardService.getRawUserInfo();
+
+                    // 2. Lấy Raw Image
+                    String rawImage = cardService.readRawImageHexFromCard();
+
+                    // 3. Trả về JSON
+                    Map<String, String> response = new HashMap<>();
+                    response.put("encryptedUserInfo", rawInfo);
+                    response.put("encryptedImage", rawImage);
+
+                    String jsonRes = gson.toJson(response);
+                    sendResponse(exchange, 200, jsonRes);
+                }
+            }
+        });
+
         server.setExecutor(null);
         server.start();
         System.out.println("Java Middleware is running on port " + port);

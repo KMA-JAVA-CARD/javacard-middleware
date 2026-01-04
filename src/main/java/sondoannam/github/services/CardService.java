@@ -37,6 +37,7 @@ public class CardService {
     private static final int INS_VERIFY_PIN = 0x02;
     private static final int INS_GET_CARD_ID = 0x06;
     private static final int INS_GET_INFO_SECURE = 0x22;
+    private static final int INS_GET_INFO_RAW = 0x25;
     private static final byte INS_CHANGE_PIN = (byte) 0x04;
     private static final byte INS_UNBLOCK_PIN = (byte) 0x05;
 
@@ -387,12 +388,7 @@ public class CardService {
         }
     }
 
-    /**
-     * Đọc ảnh từ thẻ (Ghép chunk)
-     *
-     * @return Chuỗi Hex dài chứa toàn bộ dữ liệu ảnh
-     */
-    public String readImageFromCard(String pin) { // <--- Thêm tham số PIN
+    public String readRawImageHexFromCard() {
         if (channel == null) return "Error: Card not connected";
 
         StringBuilder encryptedHexBuilder = new StringBuilder();
@@ -400,7 +396,6 @@ public class CardService {
         int chunkSize = 240;
 
         try {
-            // --- BƯỚC 1: ĐỌC DỮ LIỆU RAW (ENCRYPTED) TỪ THẺ ---
             while (offset < APPLET_MAX_IMAGE_SIZE) {
                 int p1 = (offset >> 8) & 0xFF;
                 int p2 = offset & 0xFF;
@@ -411,10 +406,8 @@ public class CardService {
                 if (res.getSW() == 0x9000) {
                     byte[] data = res.getData();
                     if (data.length == 0) break;
-
                     encryptedHexBuilder.append(HexUtils.bytesToHex(data));
                     offset += data.length;
-
                     if (data.length < chunkSize) break;
                 } else if (res.getSW() == 0x6700) {
                     break;
@@ -422,24 +415,28 @@ public class CardService {
                     return "Error: Read Failed SW=" + Integer.toHexString(res.getSW());
                 }
             }
-
-            String encryptedHex = encryptedHexBuilder.toString();
-            if (encryptedHex.isEmpty()) return "";
-
-            // --- BƯỚC 2: GIẢI MÃ ---
-            System.out.println("[INFO] Đọc xong raw hex, đang giải mã...");
-            byte[] encryptedBytes = HexUtils.hexToBytes(encryptedHex);
-
-            // Decrypt
-            byte[] decryptedBytes = decryptAES(encryptedBytes, pin);
-
-            // Trả về Hex của ảnh gốc
-            return HexUtils.bytesToHex(decryptedBytes);
-
+            return encryptedHexBuilder.toString();
         } catch (Exception e) {
-            e.printStackTrace();
-            // Lỗi này thường do sai PIN dẫn đến sai Key giải mã -> Padding error
-            return "Error: Decryption failed (Wrong PIN?) - " + e.getMessage();
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Đọc ảnh từ thẻ (Ghép chunk)
+     *
+     * @return Chuỗi Hex dài chứa toàn bộ dữ liệu ảnh
+     */
+    public String readImageFromCard(String pin) {
+        String encryptedHex = readRawImageHexFromCard();
+        if (encryptedHex.startsWith("Error")) return encryptedHex;
+        if (encryptedHex.isEmpty()) return "";
+
+        try {
+            byte[] encryptedBytes = HexUtils.hexToBytes(encryptedHex);
+            byte[] decryptedBytes = decryptAES(encryptedBytes, pin);
+            return HexUtils.bytesToHex(decryptedBytes);
+        } catch (Exception e) {
+            return "Error: Decryption failed - " + e.getMessage();
         }
     }
 
@@ -557,6 +554,25 @@ public class CardService {
             if (points == -1) points = 0;
 
             return infoString + '|' + points;
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    public String getRawUserInfo() {
+        if (channel == null) return "Error: Card not connected";
+        try {
+            // Gọi lệnh 0x25 (INS_GET_RAW_USER_DATA)
+            CommandAPDU cmd = new CommandAPDU(0xA0, INS_GET_INFO_RAW, 0x00, 0x00, 256); // Le=256
+            ResponseAPDU res = channel.transmit(cmd);
+
+            if (res.getSW() == 0x9000) {
+                return HexUtils.bytesToHex(res.getData());
+            } else if (res.getSW() == 0x6D00) {
+                return "Not Supported (Update Applet to view)";
+            } else {
+                return "Error SW=" + Integer.toHexString(res.getSW());
+            }
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
