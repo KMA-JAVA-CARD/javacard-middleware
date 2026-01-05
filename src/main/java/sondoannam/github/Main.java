@@ -18,6 +18,7 @@ public class Main {
 
     static class UploadRequest {
         String hexData;
+        String pin; // PIN để mã hóa ảnh
     }
 
     static class PinRequest {
@@ -235,10 +236,17 @@ public class Main {
                             return;
                         }
 
-                        // Log kiểm tra lại lần cuối
-                        System.out.println("[INFO] Nhận yêu cầu upload ảnh. Độ dài Hex: " + realHexData.length());
+                        String pin = request.pin;
+                        if (pin == null || pin.isEmpty()) {
+                            sendResponse(exchange, 400, "Error: pin field is missing or empty");
+                            return;
+                        }
 
-                        String result = cardService.uploadImageToCard(realHexData);
+                        // Log kiểm tra lại lần cuối
+                        System.out.println(
+                                "[INFO] Nhận yêu cầu upload ảnh (encrypted). Độ dài Hex: " + realHexData.length());
+
+                        String result = cardService.uploadImageToCard(realHexData, pin);
 
                         int status = result.startsWith("Success") ? 200 : 500;
                         sendResponse(exchange, status, result);
@@ -255,8 +263,16 @@ public class Main {
             @Override
             public void handle(HttpExchange exchange) throws IOException {
                 handleCORS(exchange);
-                if ("GET".equals(exchange.getRequestMethod())) {
-                    String result = cardService.readImageFromCard();
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    String jsonBody = new String(exchange.getRequestBody().readAllBytes());
+                    PinRequest request = gson.fromJson(jsonBody, PinRequest.class);
+
+                    if (request.pin == null || request.pin.isEmpty()) {
+                        sendResponse(exchange, 400, "Error: pin field is missing");
+                        return;
+                    }
+
+                    String result = cardService.readImageFromCard(request.pin);
 
                     // Nếu thành công trả về Hex, nếu lỗi trả về Error message
                     int status = result.startsWith("Error") ? 500 : 200;

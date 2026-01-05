@@ -288,9 +288,10 @@ public class CardService {
      * Hàm nhận chuỗi Hex ảnh, cắt nhỏ và ghi log ra file
      *
      * @param hexImage Chuỗi Hex dài của ảnh (4096 bytes ~ 8192 ký tự hex)
+     * @param pin      PIN để mã hóa ảnh trên thẻ
      * @return Thông báo kết quả
      */
-    public String uploadImageToCard(String hexImage) {
+    public String uploadImageToCard(String hexImage, String pin) {
         if (channel == null)
             return "Error: Card not connected";
 
@@ -305,46 +306,56 @@ public class CardService {
 
         if (totalBytes > APPLET_MAX_IMAGE_SIZE) {
             System.out.println("[WARN] Ảnh quá lớn (" + totalBytes + "), đang cắt xuống " + APPLET_MAX_IMAGE_SIZE);
-            // Tạo mảng mới đúng kích thước chuẩn
             byte[] trimmedData = new byte[APPLET_MAX_IMAGE_SIZE];
             System.arraycopy(imageData, 0, trimmedData, 0, APPLET_MAX_IMAGE_SIZE);
-
-            // Gán lại để xử lý
             imageData = trimmedData;
             totalBytes = APPLET_MAX_IMAGE_SIZE;
         }
+
+        byte[] pinBytes = pin.getBytes();
 
         String logFileName = "debug_image_chunks.txt";
 
         try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(logFileName, true)))) {
             String timeStamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            writer.println("\n=== REAL UPLOAD TO CARD - " + timeStamp + " ===");
+            writer.println("\n=== REAL UPLOAD TO CARD (ENCRYPTED) - " + timeStamp + " ===");
 
             int offset = 0;
             int chunkIndex = 0;
 
             while (offset < totalBytes) {
-                // 1. Cắt gói
-                int len = Math.min(MAX_APDU_DATA_SIZE, totalBytes - offset);
-                byte[] chunkData = new byte[len];
-                System.arraycopy(imageData, offset, chunkData, 0, len);
+                // 1. Cắt gói - đảm bảo chia hết cho 16 (AES block)
+                int len = Math.min(MAX_APDU_DATA_SIZE - 1 - pinBytes.length, totalBytes - offset);
+                // Làm tròn xuống bội của 16
+                len = (len / 16) * 16;
+                if (len <= 0)
+                    len = 16;
 
-                // 2. Tính P1, P2
+                byte[] chunkData = new byte[len];
+                System.arraycopy(imageData, offset, chunkData, 0, Math.min(len, totalBytes - offset));
+
+                // 2. Tạo payload: [PIN_LEN][PIN][PADDED_DATA]
+                byte[] payload = new byte[1 + pinBytes.length + len];
+                payload[0] = (byte) pinBytes.length;
+                System.arraycopy(pinBytes, 0, payload, 1, pinBytes.length);
+                System.arraycopy(chunkData, 0, payload, 1 + pinBytes.length, len);
+
+                // 3. Tính P1, P2
                 int p1 = (offset >> 8) & 0xFF;
                 int p2 = offset & 0xFF;
 
-                // 3. Ghi log debug
-                writer.printf("Packet #%d (Offset %d): Len=%d\n", chunkIndex, offset, len);
+                // 4. Ghi log debug
+                writer.printf("Packet #%d (Offset %d): Len=%d (padded)\n", chunkIndex, offset, len);
 
-                // 4. GỬI LỆNH XUỐNG THẺ THẬT
-                // CLA=A0, INS=10, P1, P2, Data
-                CommandAPDU cmd = new CommandAPDU(0xA0, INS_WRITE_IMAGE_INT, p1, p2, chunkData);
+                // 5. GỬI LỆNH XUỐNG THẺ THẬT
+                // CLA=A0, INS=10, P1, P2, Payload
+                CommandAPDU cmd = new CommandAPDU(0xA0, INS_WRITE_IMAGE_INT, p1, p2, payload);
 
                 long startTime = System.currentTimeMillis();
                 ResponseAPDU res = channel.transmit(cmd);
                 long duration = System.currentTimeMillis() - startTime;
 
-                // 5. Kiểm tra phản hồi
+                // 6. Kiểm tra phản hồi
                 if (res.getSW() != 0x9000) {
                     String errorMsg = "Upload Failed at offset " + offset + " SW=" + Integer.toHexString(res.getSW());
                     writer.println(">> ERROR: " + errorMsg);
@@ -358,8 +369,8 @@ public class CardService {
                 chunkIndex++;
             }
 
-            writer.println("=== UPLOAD COMPLETE ===");
-            return "Success: Image uploaded to card (" + totalBytes + " bytes)";
+            writer.println("=== UPLOAD COMPLETE (ENCRYPTED) ===");
+            return "Success: Image uploaded to card (encrypted, " + totalBytes + " bytes)";
 
         } catch (Exception e) {
             e.printStackTrace();
@@ -368,17 +379,19 @@ public class CardService {
     }
 
     /**
-     * Đọc ảnh từ thẻ (Ghép chunk)
+     * Đọc ảnh từ thẻ (Ghép chunk) - VỚI GIẢI MÃ AES
      *
+     * @param pin PIN để giải mã ảnh
      * @return Chuỗi Hex dài chứa toàn bộ dữ liệu ảnh
      */
-    public String readImageFromCard() {
+    public String readImageFromCard(String pin) {
         if (channel == null)
             return "Error: Card not connected";
 
+        byte[] pinBytes = pin.getBytes();
         StringBuilder fullImageHex = new StringBuilder();
         int offset = 0;
-        int chunkSize = 240; // Đọc tối đa mỗi lần (Le)
+        int chunkSize = 240; // Đọc tối đa mỗi lần (Le), chia hết cho 16
 
         try {
             while (offset < APPLET_MAX_IMAGE_SIZE) {
@@ -386,18 +399,23 @@ public class CardService {
                 int p1 = (offset >> 8) & 0xFF;
                 int p2 = offset & 0xFF;
 
-                // 2. Gửi lệnh READ (Le = chunkSize)
-                // CLA=A0, INS=11, P1, P2
-                CommandAPDU cmd = new CommandAPDU(0xA0, INS_READ_IMAGE_INT, p1, p2, chunkSize);
+                // 2. Tạo payload chứa PIN: [PIN_LEN][PIN]
+                byte[] payload = new byte[1 + pinBytes.length];
+                payload[0] = (byte) pinBytes.length;
+                System.arraycopy(pinBytes, 0, payload, 1, pinBytes.length);
+
+                // 3. Gửi lệnh READ với PIN, Le = chunkSize
+                // CLA=A0, INS=11, P1, P2, Data, Le
+                CommandAPDU cmd = new CommandAPDU(0xA0, INS_READ_IMAGE_INT, p1, p2, payload, chunkSize);
                 ResponseAPDU res = channel.transmit(cmd);
 
-                // 3. Kiểm tra phản hồi
+                // 4. Kiểm tra phản hồi
                 if (res.getSW() == 0x9000) {
                     byte[] data = res.getData();
                     if (data.length == 0)
                         break; // Không còn dữ liệu
 
-                    // Append vào kết quả
+                    // Append vào kết quả (đã được giải mã trên thẻ)
                     fullImageHex.append(HexUtils.bytesToHex(data));
 
                     offset += data.length;
@@ -407,8 +425,10 @@ public class CardService {
                         break;
 
                 } else if (res.getSW() == 0x6700) {
-                    // 0x6700 (Wrong Length) = Applet báo hiệu hết ảnh (bytesToSend <= 0)
+                    // 0x6700 (Wrong Length) = Applet báo hiệu hết ảnh
                     break;
+                } else if (res.getSW() == 0x6982) {
+                    return "Error: PIN not verified";
                 } else {
                     return "Error: Read Failed SW=" + Integer.toHexString(res.getSW());
                 }
